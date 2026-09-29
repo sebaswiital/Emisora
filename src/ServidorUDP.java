@@ -75,7 +75,7 @@ public class ServidorUDP extends JFrame {
 
             // Configuración del Socket UDP
             DatagramSocket socket = new DatagramSocket();
-            InetAddress direccionCliente = InetAddress.getByName("192.168.10.11");
+            InetAddress direccionCliente = InetAddress.getByName("localhost");
             int puertoCliente = 1235;
 
             //si experimentamos con el tamaño del buffer podemos presentar variaciones en el audio, mas velocidad o perdida de calidad.

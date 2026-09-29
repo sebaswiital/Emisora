@@ -47,9 +47,7 @@ public class ClienteUDP extends JFrame {
             // cuando hayan retrasos.
             //edit. duplique la entrada porque aun jodía, y aun asi va a tocar ponerle un prebuffering.
 
-            InetAddress ipAConectarse = InetAddress.getByName("192.168.10.11");
-            DatagramSocket socket = new DatagramSocket(1235, ipAConectarse);
-
+            DatagramSocket socket = new DatagramSocket(1235);
             byte[] buffer = new byte[2048];
 
 
