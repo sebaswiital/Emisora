@@ -15,7 +15,7 @@ public class ClienteUDP {
             SourceDataLine altavoces = (SourceDataLine) AudioSystem.getLine(info);
             //abre el formato especificado, adicional vamos a poner estos 32768 bites para que los altavoces no se queden en perdida de datos
             // cuando hayan retrasos.
-            altavoces.open(formato,32768);
+            altavoces.open(formato,65536);
             // inicia la lina de reproducción.
             altavoces.start();
             System.out.println("ya se abrieron los altavoces, todo ready");
