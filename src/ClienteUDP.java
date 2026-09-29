@@ -1,13 +1,41 @@
+import javax.swing.*;
 import javax.sound.sampled.*;
+import java.awt.*;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
-import java.net.InetAddress;
 
-public class ClienteUDP {
-    public static void main(String[] args) {
-        System.out.println("CLIENTE");
+public class ClienteUDP extends JFrame {
+//jframe una ventanita sencilla para el cliente.
+    private JButton btnConectar;
+    private JTextArea areaLogs;
 
-        AudioFormat formato = AudioConfig.getAudioFormat();
+    //boton y area de texto.
+
+    public ClienteUDP() {
+        setTitle("Cliente UDP");
+        setSize(450, 300);
+        setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        setLayout(new BorderLayout());
+
+        btnConectar = new JButton("sintonizar al puerto");
+        areaLogs = new JTextArea();
+        areaLogs.setEditable(false);
+
+        add(btnConectar, BorderLayout.NORTH);
+        add(new JScrollPane(areaLogs), BorderLayout.CENTER);
+        //el boton crea un hilo le da la maxima prioridad e inicia el hilo
+        btnConectar.addActionListener(e -> {
+            btnConectar.setEnabled(false);
+            Thread hiloReceptor = new Thread(this::recibirAudio);
+            hiloReceptor.setPriority(Thread.MAX_PRIORITY);
+            hiloReceptor.start();
+        });
+    }
+
+    private void recibirAudio() {
+        registrarLog("CLIENTE");
+
+        AudioFormat formato = AudioConfig.getAudioFormat(); // formato de el otro archivo
         DataLine.Info info = new DataLine.Info(SourceDataLine.class, formato);
 
         try {
@@ -30,7 +58,7 @@ public class ClienteUDP {
             altavoces.open(formato,65536);
             // inicia la lina de reproducción.
             altavoces.start();
-            System.out.println("ya se abrieron los altavoces, todo ready");
+            registrarLog("ya se abrieron los altavoces, todo ready");
 
 
 
@@ -44,8 +72,16 @@ public class ClienteUDP {
 
 
         } catch (Exception e) {
-            System.out.println("Error al transmitir el archivo:");
+            registrarLog("Error al transmitir el archivo:");
             e.printStackTrace();
         }
+    }
+    // registra los mensajes en el log, como su nombre lo indica, claro que lo pone en una cola para que no vaya a hacer interferencia con nada
+    private void registrarLog(String mensaje) {
+        SwingUtilities.invokeLater(() -> areaLogs.append(mensaje + "\n"));
+    }
+//mismo que en server...
+    public static void main(String[] args) {
+        SwingUtilities.invokeLater(() -> new ClienteUDP().setVisible(true));
     }
 }
