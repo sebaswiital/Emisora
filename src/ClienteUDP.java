@@ -21,18 +21,11 @@ public class ClienteUDP {
 
             byte[] buffer = new byte[2048];
 
-            //pre buffering, va a recibir los 8 primeros paquetes, sin reproducirlos, es una idea. no afecta mucho la vd]
-            //la mejora no es tan notoria.
-
-            for (int i = 0; i < 8; i++) {
-                DatagramPacket paqueteInicial = new DatagramPacket(buffer, buffer.length);
-                socket.receive(paqueteInicial);
-                altavoces.write(paqueteInicial.getData(), 0, paqueteInicial.getLength());
-            }
 
             //abre el formato especificado, adicional vamos a poner estos 32768 bites para que los altavoces no se queden en perdida de datos
             // cuando hayan retrasos.
             //edit. duplique la entrada porque aun jodía, y aun asi va a tocar ponerle un prebuffering.
+            //edit2. despues del prebuffering tampoco funcionó, lo dejo asi, no se oye mal.
 
             altavoces.open(formato,65536);
             // inicia la lina de reproducción.
