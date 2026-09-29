@@ -1,25 +1,77 @@
+import javax.swing.*;
+import javax.swing.filechooser.FileNameExtensionFilter;
 import javax.sound.sampled.*;
+import java.awt.*;
 import java.io.File;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
-import java.net.SocketException;
 
-public class ServidorUDP {
-    public static void main(String[] args) throws Exception {
+public class ServidorUDP extends JFrame {
 
-        System.out.println("SERVIDOR");
+    private JButton btnSeleccionar;
+    private JButton btnTransmitir;
+    private JTextArea areaLogs;
+    private File archivoSeleccionado;
+
+    public ServidorUDP() {
+        setTitle("Servidor Transmisor UDP");
+        setSize(500, 350);
+        setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        setLayout(new BorderLayout());
+
+        // Panel para agrupar los botones en la parte superior
+        JPanel panelBotones = new JPanel();
+        btnSeleccionar = new JButton("Seleccionar Canción (.wav)");
+        btnTransmitir = new JButton("Iniciar Transmisión");
+        btnTransmitir.setEnabled(false); // Apagado hasta que haya canción
+
+        panelBotones.add(btnSeleccionar);
+        panelBotones.add(btnTransmitir);
+
+        areaLogs = new JTextArea();
+        areaLogs.setEditable(false);
+
+        add(panelBotones, BorderLayout.NORTH);
+        add(new JScrollPane(areaLogs), BorderLayout.CENTER);
+
+        // Logica del selector de archivos
+        btnSeleccionar.addActionListener(e -> {
+            JFileChooser selector = new JFileChooser();
+            FileNameExtensionFilter filtro = new FileNameExtensionFilter("Archivos de Audio WAV", "wav");
+            selector.setFileFilter(filtro);
+
+            int resultado = selector.showOpenDialog(this);
+
+            if (resultado == JFileChooser.APPROVE_OPTION) {
+                archivoSeleccionado = selector.getSelectedFile();
+                registrarLog("Canción cargada: " + archivoSeleccionado.getName());
+                btnTransmitir.setEnabled(true);
+            }
+        });
+
+        // Lanzamiento de la transmisión en un hilo independiente
+        btnTransmitir.addActionListener(e -> {
+            if (archivoSeleccionado != null) {
+                btnTransmitir.setEnabled(false);
+                btnSeleccionar.setEnabled(false);
+                Thread hiloTransmisor = new Thread(this::transmitirAudio);
+                hiloTransmisor.setPriority(Thread.MAX_PRIORITY);
+                hiloTransmisor.start();
+            }
+        });
+    }
+
+    private void transmitirAudio() {
+        registrarLog("SERVIDOR");
         try {
-
-            String ruta = "C:/Users/Jhon Perdomo/Downloads/Daft-Punk-Digital-Love-_Official-Audio_-Daft-Punk-_128k_.wav";
-            File archivoAudio = new File(ruta);
-            AudioInputStream flujoAudioOriginal = AudioSystem.getAudioInputStream(archivoAudio);
+            // Usamos el archivo de la interfaz en lugar de la ruta estática
+            AudioInputStream flujoAudioOriginal = AudioSystem.getAudioInputStream(archivoSeleccionado);
 
             // convierte el formato del archivo al formato estándar de audioconfig
             // como se que este el archivo se va a transmitir como diga audioconfig
             AudioFormat formatoEstandar = AudioConfig.getAudioFormat();
             AudioInputStream flujoAudio = AudioSystem.getAudioInputStream(formatoEstandar, flujoAudioOriginal);
-
 
             // Configuración del Socket UDP
             DatagramSocket socket = new DatagramSocket();
@@ -42,14 +94,31 @@ public class ServidorUDP {
                 Thread.sleep(11);
             }
 
-            System.out.println("se acabó.");
+            registrarLog("se acabó.");
             socket.close();
             flujoAudio.close();
 
-        } catch (Exception e) {
-            System.out.println("Error al transmitir el archivo:");
-            e.printStackTrace();
-        }
+            //los botones al terminar para que podamos poner otra canción.
+            SwingUtilities.invokeLater(() -> {
+                btnTransmitir.setEnabled(true);
+                btnSeleccionar.setEnabled(true);
+            });
 
+        } catch (Exception e) { // manejo de errores.
+            registrarLog("Error al transmitir el archivo:");
+            e.printStackTrace();
+            SwingUtilities.invokeLater(() -> {
+                btnTransmitir.setEnabled(true);
+                btnSeleccionar.setEnabled(true);
+            });
+        }
+    }
+// registra los mensajes en el log, como su nombre lo indica, claro que lo pone en una cola para que no vaya a hacer interferencia con nada
+    private void registrarLog(String mensaje) {
+        SwingUtilities.invokeLater(() -> areaLogs.append(mensaje + "\n"));
+    }
+//comando de inicialización, hace visible la ventana y manteniendo el invoke later por lo mismo de lo anterior.
+    public static void main(String[] args) {
+        SwingUtilities.invokeLater(() -> new ServidorUDP().setVisible(true));
     }
 }
