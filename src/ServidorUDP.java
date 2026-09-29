@@ -21,7 +21,6 @@ public class ServidorUDP {
             AudioInputStream flujoAudio = AudioSystem.getAudioInputStream(formatoEstandar, flujoAudioOriginal);
 
 
-
             // Configuración del Socket UDP
             DatagramSocket socket = new DatagramSocket();
             InetAddress direccionCliente = InetAddress.getByName("localhost");
