@@ -3,6 +3,8 @@ import javax.sound.sampled.*;
 import java.awt.*;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
 
 public class ClienteUDP extends JFrame {
 //jframe una ventanita sencilla para el cliente.
@@ -45,7 +47,8 @@ public class ClienteUDP extends JFrame {
             // cuando hayan retrasos.
             //edit. duplique la entrada porque aun jodía, y aun asi va a tocar ponerle un prebuffering.
 
-            DatagramSocket socket = new DatagramSocket(1235);
+            InetAddress ipAConectarse = InetAddress.getByName("192.168.10.11");
+            DatagramSocket socket = new DatagramSocket(1235, ipAConectarse);
 
             byte[] buffer = new byte[2048];
 
