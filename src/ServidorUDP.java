@@ -13,10 +13,6 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public class ServidorUDP extends JFrame {
 
-    // cuanto baja o sube el volumen por cada paquete, 2048 bytes son unos 11.6 ms
-    // asi que con 0.012 el fade dura mas o menos 1 segundo.
-    private static final float PASO_VOLUMEN = 0.012f;
-
     private JButton btnSeleccionar;
     private JButton btnTransmitir;
     private JToggleButton btnMicrofono;
@@ -31,8 +27,6 @@ public class ServidorUDP extends JFrame {
 
     // estado compartido entre el hilo de la canción y el del micrófono.
     private volatile boolean microfonoActivo = false;
-    private volatile boolean musicaSonando = false;
-    private volatile float volumenMusica = 1f;
     private final Object candado = new Object();
 
     public ServidorUDP() {
@@ -165,9 +159,6 @@ public class ServidorUDP extends JFrame {
 
     private void transmitirAudio() {
         registrarLog("SERVIDOR");
-        musicaSonando = true;
-        // si el micro ya está prendido la canción arranca pausada, si no arranca a todo volumen.
-        volumenMusica = microfonoActivo ? 0f : 1f;
         try {
             // Usamos el archivo de la interfaz en lugar de la ruta estática
             AudioInputStream flujoAudioOriginal = AudioSystem.getAudioInputStream(archivoSeleccionado);
@@ -185,23 +176,16 @@ public class ServidorUDP extends JFrame {
             while ((bytesLeidos = flujoAudio.read(buffer, 0, buffer.length)) != -1) {
 
                 if (microfonoActivo) {
-                    // vamos bajando el volumen hasta cero y ahi pausamos la canción.
-                    volumenMusica = Math.max(0f, volumenMusica - PASO_VOLUMEN);
-                    if (volumenMusica == 0f) {
-                        registrarLog("Canción en pausa, micrófono al aire.");
-                        synchronized (candado) {
-                            while (microfonoActivo) {
-                                candado.wait();
-                            }
+                    // micro prendido: la canción se pausa aqui mismo y espera a que lo apaguen.
+                    registrarLog("Canción en pausa, micrófono al aire.");
+                    synchronized (candado) {
+                        while (microfonoActivo) {
+                            candado.wait();
                         }
-                        registrarLog("Volvemos con la canción.");
                     }
-                } else if (volumenMusica < 1f) {
-                    // el micro se apagó, subimos el volumen de a poquitos.
-                    volumenMusica = Math.min(1f, volumenMusica + PASO_VOLUMEN);
+                    registrarLog("Volvemos con la canción.");
                 }
 
-                aplicarVolumen(buffer, bytesLeidos, volumenMusica);
                 enviarATodos(buffer, bytesLeidos);
 
                 // Control de flujo para simular tiempo real
@@ -217,7 +201,6 @@ public class ServidorUDP extends JFrame {
             registrarLog("Error al transmitir el archivo:");
             e.printStackTrace();
         } finally {
-            musicaSonando = false;
             //los botones al terminar para que podamos poner otra canción.
             SwingUtilities.invokeLater(() -> {
                 btnTransmitir.setEnabled(true);
@@ -241,17 +224,7 @@ public class ServidorUDP extends JFrame {
             microfono = (TargetDataLine) AudioSystem.getLine(new DataLine.Info(TargetDataLine.class, formatoMicrofono));
             microfono.open(formatoMicrofono);
             microfono.start();
-            registrarLog("Micrófono abierto" + (esMono ? " (mono)" : "") + ", bajando la canción...");
-
-            // esperamos a que la canción llegue a cero para no mandar dos audios revueltos.
-            while (musicaSonando && volumenMusica > 0f && microfonoActivo) {
-                Thread.sleep(10);
-            }
-            // lo que grabó el micro mientras bajaba la canción se bota.
-            microfono.flush();
-            if (microfonoActivo) {
-                registrarLog("Micrófono AL AIRE.");
-            }
+            registrarLog("Micrófono AL AIRE" + (esMono ? " (mono)." : "."));
 
             byte[] bufferMono = new byte[AudioConfig.TAMANO_BUFFER / 2];
             byte[] buffer = new byte[AudioConfig.TAMANO_BUFFER];
@@ -279,7 +252,7 @@ public class ServidorUDP extends JFrame {
                 microfono.close();
             }
             microfonoActivo = false;
-            // despertamos la canción para que vuelva a subir.
+            // despertamos la canción para que siga desde donde quedó.
             synchronized (candado) {
                 candado.notifyAll();
             }
@@ -287,19 +260,6 @@ public class ServidorUDP extends JFrame {
                 btnMicrofono.setSelected(false);
                 btnMicrofono.setEnabled(true);
             });
-        }
-    }
-
-    // multiplica cada muestra de 16 bits (little endian) por el volumen, 1 = normal, 0 = silencio.
-    private void aplicarVolumen(byte[] datos, int largo, float volumen) {
-        if (volumen >= 1f) {
-            return;
-        }
-        for (int i = 0; i + 1 < largo; i += 2) {
-            short muestra = (short) ((datos[i] & 0xFF) | (datos[i + 1] << 8));
-            int nueva = (int) (muestra * volumen);
-            datos[i] = (byte) nueva;
-            datos[i + 1] = (byte) (nueva >> 8);
         }
     }
 
