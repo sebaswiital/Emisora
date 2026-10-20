@@ -3,20 +3,41 @@ import javax.swing.filechooser.FileNameExtensionFilter;
 import javax.sound.sampled.*;
 import java.awt.*;
 import java.io.File;
+import java.io.IOException;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
-import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class ServidorUDP extends JFrame {
 
+    // cuanto baja o sube el volumen por cada paquete, 2048 bytes son unos 11.6 ms
+    // asi que con 0.012 el fade dura mas o menos 1 segundo.
+    private static final float PASO_VOLUMEN = 0.012f;
+
     private JButton btnSeleccionar;
     private JButton btnTransmitir;
+    private JToggleButton btnMicrofono;
+    private JLabel lblOyentes;
     private JTextArea areaLogs;
     private File archivoSeleccionado;
 
+    // un solo socket para escuchar a los oyentes y mandarles el audio.
+    private DatagramSocket socket;
+    // lista de oyentes conectados, se puede tocar desde varios hilos al tiempo.
+    private final Set<InetSocketAddress> clientes = ConcurrentHashMap.newKeySet();
+
+    // estado compartido entre el hilo de la canción y el del micrófono.
+    private volatile boolean microfonoActivo = false;
+    private volatile boolean musicaSonando = false;
+    private volatile float volumenMusica = 1f;
+    private final Object candado = new Object();
+
     public ServidorUDP() {
         setTitle("Servidor Transmisor UDP");
-        setSize(500, 350);
+        setSize(600, 350);
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         setLayout(new BorderLayout());
 
@@ -25,15 +46,20 @@ public class ServidorUDP extends JFrame {
         btnSeleccionar = new JButton("Seleccionar Canción (.wav)");
         btnTransmitir = new JButton("Iniciar Transmisión");
         btnTransmitir.setEnabled(false); // Apagado hasta que haya canción
+        btnMicrofono = new JToggleButton("Micrófono al aire");
 
         panelBotones.add(btnSeleccionar);
         panelBotones.add(btnTransmitir);
+        panelBotones.add(btnMicrofono);
 
         areaLogs = new JTextArea();
         areaLogs.setEditable(false);
 
+        lblOyentes = new JLabel("Oyentes conectados: 0");
+
         add(panelBotones, BorderLayout.NORTH);
         add(new JScrollPane(areaLogs), BorderLayout.CENTER);
+        add(lblOyentes, BorderLayout.SOUTH);
 
         // Logica del selector de archivos
         btnSeleccionar.addActionListener(e -> {
@@ -60,10 +86,88 @@ public class ServidorUDP extends JFrame {
                 hiloTransmisor.start();
             }
         });
+
+        // prender o apagar el micrófono, cada vez que se prende se lanza un hilo nuevo
+        btnMicrofono.addActionListener(e -> {
+            if (btnMicrofono.isSelected()) {
+                microfonoActivo = true;
+                Thread hiloMicrofono = new Thread(this::transmitirMicrofono);
+                hiloMicrofono.setPriority(Thread.MAX_PRIORITY);
+                hiloMicrofono.start();
+            } else {
+                // se bloquea hasta que el hilo del micro termine de cerrar la linea.
+                btnMicrofono.setEnabled(false);
+                microfonoActivo = false;
+            }
+        });
+
+        iniciarSocket();
+    }
+
+    // abre el socket en el puerto del servidor y deja un hilo escuchando a los oyentes.
+    private void iniciarSocket() {
+        try {
+            socket = new DatagramSocket(AudioConfig.PUERTO_SERVIDOR);
+            registrarLog("Emisora al aire en el puerto " + AudioConfig.PUERTO_SERVIDOR + ", esperando oyentes...");
+            Thread hiloOyentes = new Thread(this::escucharClientes);
+            hiloOyentes.setDaemon(true);
+            hiloOyentes.start();
+        } catch (IOException e) {
+            registrarLog("No se pudo abrir el puerto " + AudioConfig.PUERTO_SERVIDOR + ", ¿ya hay otro servidor abierto?");
+            e.printStackTrace();
+            btnTransmitir.setEnabled(false);
+            btnSeleccionar.setEnabled(false);
+            btnMicrofono.setEnabled(false);
+        }
+    }
+
+    // recibe los mensajes de CONECTAR y DESCONECTAR de los clientes.
+    private void escucharClientes() {
+        byte[] buffer = new byte[64];
+        while (!socket.isClosed()) {
+            try {
+                DatagramPacket paquete = new DatagramPacket(buffer, buffer.length);
+                socket.receive(paquete);
+
+                String mensaje = new String(paquete.getData(), 0, paquete.getLength(), StandardCharsets.UTF_8).trim();
+                InetSocketAddress cliente = (InetSocketAddress) paquete.getSocketAddress();
+
+                if (AudioConfig.CMD_CONECTAR.equals(mensaje)) {
+                    if (clientes.add(cliente)) {
+                        registrarLog("Oyente conectado: " + cliente.getAddress().getHostAddress() + ":" + cliente.getPort());
+                    }
+                } else if (AudioConfig.CMD_DESCONECTAR.equals(mensaje)) {
+                    if (clientes.remove(cliente)) {
+                        registrarLog("Oyente desconectado: " + cliente.getAddress().getHostAddress() + ":" + cliente.getPort());
+                    }
+                }
+                actualizarOyentes();
+            } catch (IOException e) {
+                if (!socket.isClosed()) {
+                    registrarLog("Error recibiendo de un oyente: " + e.getMessage());
+                }
+            }
+        }
+    }
+
+    // manda el mismo paquete a todos los oyentes conectados.
+    private void enviarATodos(byte[] datos, int largo) {
+        for (InetSocketAddress cliente : clientes) {
+            try {
+                socket.send(new DatagramPacket(datos, largo, cliente));
+            } catch (IOException e) {
+                registrarLog("No se pudo enviar a " + cliente + ", se saca de la lista.");
+                clientes.remove(cliente);
+                actualizarOyentes();
+            }
+        }
     }
 
     private void transmitirAudio() {
         registrarLog("SERVIDOR");
+        musicaSonando = true;
+        // si el micro ya está prendido la canción arranca pausada, si no arranca a todo volumen.
+        volumenMusica = microfonoActivo ? 0f : 1f;
         try {
             // Usamos el archivo de la interfaz en lugar de la ruta estática
             AudioInputStream flujoAudioOriginal = AudioSystem.getAudioInputStream(archivoSeleccionado);
@@ -73,46 +177,148 @@ public class ServidorUDP extends JFrame {
             AudioFormat formatoEstandar = AudioConfig.getAudioFormat();
             AudioInputStream flujoAudio = AudioSystem.getAudioInputStream(formatoEstandar, flujoAudioOriginal);
 
-            // Configuración del Socket UDP
-            DatagramSocket socket = new DatagramSocket();
-            InetAddress direccionCliente = InetAddress.getByName("localhost");
-            int puertoCliente = 1235;
-
             //si experimentamos con el tamaño del buffer podemos presentar variaciones en el audio, mas velocidad o perdida de calidad.
-            byte[] buffer = new byte[2048];
+            byte[] buffer = new byte[AudioConfig.TAMANO_BUFFER];
             int bytesLeidos;
 
             // El bucle se acaba cuando read() devuelve -1 o sea, cuando el archivo termine.
             while ((bytesLeidos = flujoAudio.read(buffer, 0, buffer.length)) != -1) {
 
-                DatagramPacket paquete = new DatagramPacket(buffer, bytesLeidos, direccionCliente, puertoCliente);
-                socket.send(paquete);
+                if (microfonoActivo) {
+                    // vamos bajando el volumen hasta cero y ahi pausamos la canción.
+                    volumenMusica = Math.max(0f, volumenMusica - PASO_VOLUMEN);
+                    if (volumenMusica == 0f) {
+                        registrarLog("Canción en pausa, micrófono al aire.");
+                        synchronized (candado) {
+                            while (microfonoActivo) {
+                                candado.wait();
+                            }
+                        }
+                        registrarLog("Volvemos con la canción.");
+                    }
+                } else if (volumenMusica < 1f) {
+                    // el micro se apagó, subimos el volumen de a poquitos.
+                    volumenMusica = Math.min(1f, volumenMusica + PASO_VOLUMEN);
+                }
+
+                aplicarVolumen(buffer, bytesLeidos, volumenMusica);
+                enviarATodos(buffer, bytesLeidos);
 
                 // Control de flujo para simular tiempo real
-                // 44100 Hz * 2 bytes 16 bits * 1 canal = 88200 bytes por segundo.
-                // 1024 bytes equivalen a aprox 11.6 milisegundos de audio.
+                // 44100 Hz * 2 bytes 16 bits * 2 canales = 176400 bytes por segundo.
+                // 2048 bytes equivalen a aprox 11.6 milisegundos de audio.
                 Thread.sleep(11);
             }
 
             registrarLog("se acabó.");
-            socket.close();
             flujoAudio.close();
-
-            //los botones al terminar para que podamos poner otra canción.
-            SwingUtilities.invokeLater(() -> {
-                btnTransmitir.setEnabled(true);
-                btnSeleccionar.setEnabled(true);
-            });
 
         } catch (Exception e) { // manejo de errores.
             registrarLog("Error al transmitir el archivo:");
             e.printStackTrace();
+        } finally {
+            musicaSonando = false;
+            //los botones al terminar para que podamos poner otra canción.
             SwingUtilities.invokeLater(() -> {
                 btnTransmitir.setEnabled(true);
                 btnSeleccionar.setEnabled(true);
             });
         }
     }
+
+    private void transmitirMicrofono() {
+        TargetDataLine microfono = null;
+        try {
+            // primero intentamos con el formato de la emisora (estereo), si el micro no lo soporta usamos mono
+            // y duplicamos cada muestra para que el cliente lo siga recibiendo en estereo.
+            AudioFormat formatoEstandar = AudioConfig.getAudioFormat();
+            AudioFormat formatoMono = new AudioFormat(formatoEstandar.getSampleRate(),
+                    formatoEstandar.getSampleSizeInBits(), 1, true, formatoEstandar.isBigEndian());
+
+            boolean esMono = !AudioSystem.isLineSupported(new DataLine.Info(TargetDataLine.class, formatoEstandar));
+            AudioFormat formatoMicrofono = esMono ? formatoMono : formatoEstandar;
+
+            microfono = (TargetDataLine) AudioSystem.getLine(new DataLine.Info(TargetDataLine.class, formatoMicrofono));
+            microfono.open(formatoMicrofono);
+            microfono.start();
+            registrarLog("Micrófono abierto" + (esMono ? " (mono)" : "") + ", bajando la canción...");
+
+            // esperamos a que la canción llegue a cero para no mandar dos audios revueltos.
+            while (musicaSonando && volumenMusica > 0f && microfonoActivo) {
+                Thread.sleep(10);
+            }
+            // lo que grabó el micro mientras bajaba la canción se bota.
+            microfono.flush();
+            if (microfonoActivo) {
+                registrarLog("Micrófono AL AIRE.");
+            }
+
+            byte[] bufferMono = new byte[AudioConfig.TAMANO_BUFFER / 2];
+            byte[] buffer = new byte[AudioConfig.TAMANO_BUFFER];
+
+            while (microfonoActivo) {
+                // read se bloquea hasta llenar el buffer, asi que el mismo micro lleva el ritmo, no hace falta sleep.
+                if (esMono) {
+                    int leidos = microfono.read(bufferMono, 0, bufferMono.length);
+                    int largo = monoAEstereo(bufferMono, leidos, buffer);
+                    enviarATodos(buffer, largo);
+                } else {
+                    int leidos = microfono.read(buffer, 0, buffer.length);
+                    enviarATodos(buffer, leidos);
+                }
+            }
+
+            registrarLog("Micrófono apagado.");
+
+        } catch (Exception e) {
+            registrarLog("Error con el micrófono: " + e.getMessage());
+            e.printStackTrace();
+        } finally {
+            if (microfono != null) {
+                microfono.stop();
+                microfono.close();
+            }
+            microfonoActivo = false;
+            // despertamos la canción para que vuelva a subir.
+            synchronized (candado) {
+                candado.notifyAll();
+            }
+            SwingUtilities.invokeLater(() -> {
+                btnMicrofono.setSelected(false);
+                btnMicrofono.setEnabled(true);
+            });
+        }
+    }
+
+    // multiplica cada muestra de 16 bits (little endian) por el volumen, 1 = normal, 0 = silencio.
+    private void aplicarVolumen(byte[] datos, int largo, float volumen) {
+        if (volumen >= 1f) {
+            return;
+        }
+        for (int i = 0; i + 1 < largo; i += 2) {
+            short muestra = (short) ((datos[i] & 0xFF) | (datos[i + 1] << 8));
+            int nueva = (int) (muestra * volumen);
+            datos[i] = (byte) nueva;
+            datos[i + 1] = (byte) (nueva >> 8);
+        }
+    }
+
+    // copia cada muestra mono (2 bytes) en el canal izquierdo y derecho, devuelve los bytes escritos.
+    private int monoAEstereo(byte[] mono, int largo, byte[] estereo) {
+        int j = 0;
+        for (int i = 0; i + 1 < largo; i += 2) {
+            estereo[j++] = mono[i];
+            estereo[j++] = mono[i + 1];
+            estereo[j++] = mono[i];
+            estereo[j++] = mono[i + 1];
+        }
+        return j;
+    }
+
+    private void actualizarOyentes() {
+        SwingUtilities.invokeLater(() -> lblOyentes.setText("Oyentes conectados: " + clientes.size()));
+    }
+
 // registra los mensajes en el log, como su nombre lo indica, claro que lo pone en una cola para que no vaya a hacer interferencia con nada
     private void registrarLog(String mensaje) {
         SwingUtilities.invokeLater(() -> areaLogs.append(mensaje + "\n"));
