@@ -28,6 +28,8 @@ public class ServidorUDP extends JFrame {
     // estado compartido entre el hilo de la canción y el del micrófono.
     private volatile boolean microfonoActivo = false;
     private final Object candado = new Object();
+    // locutor que habla desde otro pc, null si no hay nadie al aire.
+    private volatile InetSocketAddress locutorRemoto;
 
     public ServidorUDP() {
         setTitle("Servidor Transmisor UDP");
@@ -117,7 +119,8 @@ public class ServidorUDP extends JFrame {
 
     // recibe los mensajes de CONECTAR y DESCONECTAR de los clientes.
     private void escucharClientes() {
-        byte[] buffer = new byte[64];
+        // del tamaño de un paquete de audio porque el locutor externo tambien manda su voz por aqui.
+        byte[] buffer = new byte[AudioConfig.TAMANO_BUFFER];
         while (!socket.isClosed()) {
             try {
                 DatagramPacket paquete = new DatagramPacket(buffer, buffer.length);
@@ -126,7 +129,25 @@ public class ServidorUDP extends JFrame {
                 String mensaje = new String(paquete.getData(), 0, paquete.getLength(), StandardCharsets.UTF_8).trim();
                 InetSocketAddress cliente = (InetSocketAddress) paquete.getSocketAddress();
 
-                if (AudioConfig.CMD_CONECTAR.equals(mensaje)) {
+                // lo que mande el locutor que no sea OFF es audio, se reenvia tal cual a los oyentes.
+                if (cliente.equals(locutorRemoto) && !AudioConfig.CMD_LOCUTOR_OFF.equals(mensaje)) {
+                    enviarATodos(paquete.getData(), paquete.getLength());
+                    continue;
+                }
+
+                if (AudioConfig.CMD_LOCUTOR_ON.equals(mensaje)) {
+                    locutorRemoto = cliente;
+                    registrarLog("Locutor externo AL AIRE: " + cliente.getAddress().getHostAddress() + ":" + cliente.getPort());
+                } else if (AudioConfig.CMD_LOCUTOR_OFF.equals(mensaje)) {
+                    if (cliente.equals(locutorRemoto)) {
+                        locutorRemoto = null;
+                        registrarLog("Locutor externo fuera del aire.");
+                        // despertamos la canción igual que cuando se apaga el micro local.
+                        synchronized (candado) {
+                            candado.notifyAll();
+                        }
+                    }
+                } else if (AudioConfig.CMD_CONECTAR.equals(mensaje)) {
                     if (clientes.add(cliente)) {
                         registrarLog("Oyente conectado: " + cliente.getAddress().getHostAddress() + ":" + cliente.getPort());
                     }
@@ -175,11 +196,11 @@ public class ServidorUDP extends JFrame {
             // El bucle se acaba cuando read() devuelve -1 o sea, cuando el archivo termine.
             while ((bytesLeidos = flujoAudio.read(buffer, 0, buffer.length)) != -1) {
 
-                if (microfonoActivo) {
-                    // micro prendido: la canción se pausa aqui mismo y espera a que lo apaguen.
+                if (microfonoActivo || locutorRemoto != null) {
+                    // micro (local o externo) prendido: la canción se pausa aqui mismo y espera a que lo apaguen.
                     registrarLog("Canción en pausa, micrófono al aire.");
                     synchronized (candado) {
-                        while (microfonoActivo) {
+                        while (microfonoActivo || locutorRemoto != null) {
                             candado.wait();
                         }
                     }

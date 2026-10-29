@@ -9,6 +9,9 @@ public class AudioConfig {
     // mensajes que manda el cliente para entrar o salir de la emisora.
     public static final String CMD_CONECTAR = "CONECTAR";
     public static final String CMD_DESCONECTAR = "DESCONECTAR";
+    // mensajes que manda el locutor externo para salir o quitarse del aire.
+    public static final String CMD_LOCUTOR_ON = "LOCUTOR_ON";
+    public static final String CMD_LOCUTOR_OFF = "LOCUTOR_OFF";
 
     public static AudioFormat getAudioFormat() {
         float sampleRate = 44100.0F; //Frecuencia de muestreo (44.1 kHz, calidad CD)
